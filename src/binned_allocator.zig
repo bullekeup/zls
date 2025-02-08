@@ -69,22 +69,22 @@ pub fn BinnedAllocator(comptime config: Config) type {
                     .alloc = alloc,
                     .resize = resize,
                     .free = free,
+                    .remap = remap,
                 },
             };
         }
 
-        fn alloc(ctx: *anyopaque, len: usize, log2_align: u8, ret_addr: usize) ?[*]u8 {
+        fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
             const self: *Self = @ptrCast(@alignCast(ctx));
 
-            const align_ = @as(usize, 1) << @as(std.math.Log2Int(usize), @intCast(log2_align));
-            const size = @max(len, align_);
+            const size = @max(len, alignment.toByteUnits());
             inline for (&self.bins) |*bin| {
                 if (size <= bin.size) {
                     return bin.alloc(self.backing_allocator);
                 }
             }
 
-            if (self.backing_allocator.rawAlloc(len, log2_align, ret_addr)) |ptr| {
+            if (self.backing_allocator.rawAlloc(len, alignment, ret_addr)) |ptr| {
                 if (config.report_leaks) {
                     self.large_count.increment();
                 }
@@ -94,10 +94,10 @@ pub fn BinnedAllocator(comptime config: Config) type {
             }
         }
 
-        fn resize(ctx: *anyopaque, buf: []u8, log2_align: u8, new_len: usize, ret_addr: usize) bool {
+        fn resize(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
             const self: *Self = @ptrCast(@alignCast(ctx));
 
-            const align_ = @as(usize, 1) << @as(std.math.Log2Int(usize), @intCast(log2_align));
+            const align_ = alignment.toByteUnits();
             comptime var prev_size: usize = 0;
             inline for (&self.bins) |*bin| {
                 if (buf.len <= bin.size and align_ <= bin.size) {
@@ -109,13 +109,17 @@ pub fn BinnedAllocator(comptime config: Config) type {
 
             // Assuming it's a large alloc
             if (new_len <= prev_size) return false; // New size fits into a bin
-            return self.backing_allocator.rawResize(buf, log2_align, new_len, ret_addr);
+            return self.backing_allocator.rawResize(buf, alignment, new_len, ret_addr);
         }
 
-        fn free(ctx: *anyopaque, buf: []u8, log2_align: u8, ret_addr: usize) void {
+        fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+            return if (resize(ctx, memory, alignment, new_len, ret_addr)) memory.ptr else null;
+        }
+
+        fn free(ctx: *anyopaque, buf: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
             const self: *Self = @ptrCast(@alignCast(ctx));
 
-            const align_ = @as(usize, 1) << @as(std.math.Log2Int(usize), @intCast(log2_align));
+            const align_ = alignment.toByteUnits();
             inline for (&self.bins) |*bin| {
                 if (buf.len <= bin.size and align_ <= bin.size) {
                     bin.free(buf.ptr);
@@ -124,7 +128,7 @@ pub fn BinnedAllocator(comptime config: Config) type {
             }
 
             // Assuming it's a large alloc
-            self.backing_allocator.rawFree(buf, log2_align, ret_addr);
+            self.backing_allocator.rawFree(buf, alignment, ret_addr);
             if (config.report_leaks) {
                 self.large_count.decrement();
             }

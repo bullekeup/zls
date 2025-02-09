@@ -98,6 +98,7 @@ pub const FailingAllocator = struct {
                 .alloc = alloc,
                 .resize = resize,
                 .free = free,
+                .remap = remap,
             },
         };
     }
@@ -105,35 +106,46 @@ pub const FailingAllocator = struct {
     fn alloc(
         ctx: *anyopaque,
         len: usize,
-        log2_ptr_align: u8,
+        alignment: std.mem.Alignment,
         return_address: usize,
     ) ?[*]u8 {
         const self: *FailingAllocator = @ptrCast(@alignCast(ctx));
         if (shouldFail(self)) return null;
-        return self.internal_allocator.rawAlloc(len, log2_ptr_align, return_address);
+        return self.internal_allocator.rawAlloc(len, alignment, return_address);
     }
 
     fn resize(
         ctx: *anyopaque,
         old_mem: []u8,
-        log2_old_align: u8,
+        alignment: std.mem.Alignment,
         new_len: usize,
         ra: usize,
     ) bool {
         const self: *FailingAllocator = @ptrCast(@alignCast(ctx));
-        if (!self.internal_allocator.rawResize(old_mem, log2_old_align, new_len, ra))
+        if (!self.internal_allocator.rawResize(old_mem, alignment, new_len, ra))
             return false;
         return true;
+    }
+
+    fn remap(
+        ctx: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        ret_addr: usize,
+    ) ?[*]u8 {
+        const self: *FailingAllocator = @ptrCast(@alignCast(ctx));
+        return if (self.internal_allocator.remap(memory, alignment, new_len, ret_addr)) |res| res.ptr else null;
     }
 
     fn free(
         ctx: *anyopaque,
         old_mem: []u8,
-        log2_old_align: u8,
+        alignment: std.mem.Alignment,
         ra: usize,
     ) void {
         const self: *FailingAllocator = @ptrCast(@alignCast(ctx));
-        self.internal_allocator.rawFree(old_mem, log2_old_align, ra);
+        self.internal_allocator.rawFree(old_mem, alignment, ra);
     }
 
     fn shouldFail(self: *FailingAllocator) bool {
